@@ -1,27 +1,21 @@
-name: Build Kernel (Oneplus 8 Series - OxygenOS 13 A13)
+name: Build Kernel (OnePlus 8 Series - OxygenOS 13 A13)
 
 on:
-  workflow_call:
-  workflow_dispatch:
+  workflow_dispatch: # 支持手动触发
 
 env:
-  # Device env
-  DEVICE_NAME : "oneplus_8_cn"
-  DEVICE_CODENAME : "instantnoodle"
+  DEVICE_NAME: "oneplus_8_cn"
+  DEVICE_CODENAME: "instantnoodle"
 
-  # 修改后的工具链地址
-  KERNEL_SOURCE : "https://github.com/Townwang/android_kernel_oneplus_sm8250.git"
-  KERNEL_BRANCH : "oos13.1"
+  KERNEL_SOURCE: "https://github.com/Townwang/android_kernel_oneplus_sm8250.git"
+  KERNEL_BRANCH: "oos13.1"
+  CLANG_SOURCE: "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
+  DEFCONFIG_NAME: xtd_defconfig
 
-  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
+  AK3_SOURCE: "https://github.com/JackA1ltman/OP8_AnyKernel3.git"
+  AK3_BRANCH: main
 
-  DEFCONFIG_NAME : "xtd_defconfig"
-
-  AK3_SOURCE : "https://github.com/JackA1ltman/OP8_AnyKernel3.git"
-  AK3_BRANCH : "main"
-
-  ROM_TEXT : "oxygen13.1_a13"
-  
+  ROM_TEXT: "oxygen13.1_a13"
   PACK_METHOD: "Anykernel3"
 
 jobs:
@@ -29,44 +23,51 @@ jobs:
     name: Oneplus 8 Series - Build
     runs-on: ubuntu-22.04
     steps:
-      - name: ⏰ Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.KERNEL_BRANCH }}
+    - name: ⏰ Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ env.KERNEL_BRANCH }}
 
-      - name: Download and setup Clang Toolchain
-        run: |
-          mkdir -p $HOME/toolchains/clang
-          wget -q ${{ env.CLANG_SOURCE }} -O $HOME/toolchains/clang/clang.tar.xz
-          sudo apt-get update && sudo apt-get install -y xz-utils
-          tar -xf $HOME/toolchains/clang/clang.tar.xz -C $HOME/toolchains/clang --strip-components=1
-          export PATH=$HOME/toolchains/clang/bin:$PATH
+    - name: Download and setup Clang Toolchain
+      run: |
+        mkdir -p $HOME/toolchains/clang
+        wget -q ${{ env.CLANG_SOURCE }} -O $HOME/toolchains/clang/clang.tar.xz
+        sudo apt-get update && sudo apt-get install -y xz-utils
+        tar -xf $HOME/toolchains/clang/clang.tar.xz -C $HOME/toolchains/clang --strip-components=1
+        export PATH=$HOME/toolchains/clang/bin:$PATH
 
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev bc build-essential flex bison libelf-dev
+    - name: Install Build Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev bc flex bison libelf-dev build-essential
 
-      - name: Setup Kernel Configuration
-        run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CROSS_COMPILE=$HOME/toolchains/clang/bin/aarch64-linux-gnu-
-          mkdir -p out
-          make O=out ARCH=arm64 ${{ env.DEFCONFIG_NAME }}
+    - name: Setup Kernel Configuration
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=$HOME/toolchains/clang/bin/llvm-
+        export CC=clang
+        export LD=ld.lld
+        mkdir -p out
+        make O=out ARCH=arm64 ${{ env.DEFCONFIG_NAME }}
 
-      - name: Compile Kernel
-        run: |
-          make -j$(nproc) O=out ARCH=arm64
+    - name: Compile Kernel
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=$HOME/toolchains/clang/bin/llvm-
+        export CC=clang
+        export LD=ld.lld
+        make -j$(nproc) O=out ARCH=arm64
 
-      - name: Package Kernel into ZIP
-        run: |
-          mkdir -p anykernel
-          cp out/arch/arm64/boot/Image.gz-dtb anykernel/
-          zip -r9 kernel.zip anykernel/
+    - name: Package Kernel into ZIP
+      run: |
+        mkdir -p anykernel
+        cp out/arch/arm64/boot/Image.gz-dtb anykernel/
+        zip -r9 kernel.zip anykernel/
 
-      - name: Upload Kernel ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel
-          path: kernel.zip
+    - name: Upload Kernel ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel
+        path: kernel.zip
