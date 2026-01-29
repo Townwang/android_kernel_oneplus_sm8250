@@ -4,10 +4,10 @@ on:
   workflow_dispatch: # 手动触发
   push:
     branches:
-      - oos13.1
+      - oos13.1 # 按需调整分支
   pull_request:
     branches:
-      - oos13.1
+      - oos13.1 # 按需调整分支
 
 jobs:
   build:
@@ -18,25 +18,25 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # 使用稳定的 clang 工具链备用链接
+    # 下载稳定的工具链
     - name: Download Toolchain
       run: |
         mkdir -p ~/toolchains/clang
-        wget -q https://releases.linaro.org/components/toolchain/binaries/latest/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz -O ~/toolchains/clang/clang.tar.xz
-        tar -xf ~/toolchains/clang/clang.tar.xz -C ~/toolchains/clang --strip-components=1
+        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/platform-tools-build.tar.gz -O ~/toolchains/clang/clang.tar.gz
+        tar -xf ~/toolchains/clang/clang.tar.gz -C ~/toolchains/clang
         export PATH=~/toolchains/clang/bin:$PATH
 
-    # 确保所需依赖已安装
+    # 安装所需依赖包
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libssl-dev xz-utils bc build-essential flex bison
+        sudo apt-get install -y libssl-dev xz-utils bc flex bison build-essential
 
     # 设置环境变量
     - name: Set environment variables
       run: |
         export ARCH=arm64
-        export CROSS_COMPILE=~/toolchains/clang/bin/aarch64-linux-gnu-
+        export CROSS_COMPILE=~/toolchains/clang/bin/aarch64-linux-android-
         export PATH=~/toolchains/clang/bin:$PATH
 
     # 编译内核
@@ -46,14 +46,14 @@ jobs:
         make O=out ARCH=arm64 defconfig
         make -j$(nproc) O=out ARCH=arm64
 
-    # 打包生成内核文件
+    # 打包内核
     - name: Package Kernel into ZIP
       run: |
         mkdir -p anykernel
         cp out/arch/arm64/boot/Image.gz-dtb anykernel/
         zip -r9 kernel.zip anykernel/
 
-    # 上传生成的 ZIP 文件
+    # 上传生成的 zip 文件
     - name: Upload Kernel ZIP
       uses: actions/upload-artifact@v4
       with:
