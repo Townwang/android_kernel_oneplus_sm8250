@@ -1,62 +1,72 @@
-name: Build Kernel
+name: Build Kernel (Oneplus 8 Series - OxygenOS 13 A13)
 
 on:
-  workflow_dispatch: # 支持手动触发
-  push:
-    branches:
-      - main # 替换为你的分支名称
-  pull_request:
-    branches:
-      - main # 替换为你的分支名称
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  # Device env
+  DEVICE_NAME : "oneplus_8_cn"
+  DEVICE_CODENAME : "instantnoodle"
+
+  # 修改后的工具链地址
+  KERNEL_SOURCE : "https://github.com/Townwang/android_kernel_oneplus_sm8250.git"
+  KERNEL_BRANCH : "oos13.1"
+
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-Linux-X64.tar.xz"
+
+  DEFCONFIG_NAME : "xtd_defconfig"
+
+  AK3_SOURCE : "https://github.com/JackA1ltman/OP8_AnyKernel3.git"
+  AK3_BRANCH : "main"
+
+  ROM_TEXT : "oxygen13.1_a13"
+  
+  PACK_METHOD: "Anykernel3"
 
 jobs:
-  build:
-    name: Build Kernel
-    runs-on: ubuntu-latest
+  build-kernel:
+    name: Oneplus 8 Series - Build
+    runs-on: ubuntu-22.04
     steps:
-    # 检出代码
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.KERNEL_BRANCH }}
 
-    # 下载 Neutron 工具链
-    - name: Download and Setup Toolchain
-      run: |
-        mkdir -p ~/toolchains/clang
-        wget -q https://github.com/kdrag0n/proton-clang/releases/download/20230814/neutron-clang.tar.zst -O ~/toolchain/neutron-clang.tar.zst
-        sudo apt-get update && sudo apt-get install -y zstd
-        tar -I zstd -xf ~/toolchain/neutron-clang.tar.zst -C ~/toolchains/clang --strip-components=1
-        export PATH=~/toolchains/clang/bin:$PATH
+      - name: Download and setup Clang Toolchain
+        run: |
+          mkdir -p $HOME/toolchains/clang
+          wget -q ${{ env.CLANG_SOURCE }} -O $HOME/toolchains/clang/clang.tar.xz
+          sudo apt-get update && sudo apt-get install -y xz-utils
+          tar -xf $HOME/toolchains/clang/clang.tar.xz -C $HOME/toolchains/clang --strip-components=1
+          export PATH=$HOME/toolchains/clang/bin:$PATH
 
-    # 安装依赖
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libssl-dev bc build-essential bison flex libelf-dev
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev bc build-essential flex bison libelf-dev
 
-    # 设置环境变量
-    - name: Set Environment Variables
-      run: |
-        export ARCH=arm64
-        export CROSS_COMPILE=~/toolchains/clang/bin/aarch64-linux-gnu-
-        export PATH=~/toolchains/clang/bin:$PATH
+      - name: Setup Kernel Configuration
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=$HOME/toolchains/clang/bin/aarch64-linux-gnu-
+          mkdir -p out
+          make O=out ARCH=arm64 ${{ env.DEFCONFIG_NAME }}
 
-    # 编译内核
-    - name: Build Kernel
-      run: |
-        mkdir -p out
-        make O=out ARCH=arm64 defconfig
-        make -j$(nproc) O=out ARCH=arm64
+      - name: Compile Kernel
+        run: |
+          make -j$(nproc) O=out ARCH=arm64
 
-    # 打包生成内核
-    - name: Package Kernel into ZIP
-      run: |
-        mkdir -p anykernel
-        cp out/arch/arm64/boot/Image.gz-dtb anykernel/
-        zip -r9 kernel.zip anykernel/
+      - name: Package Kernel into ZIP
+        run: |
+          mkdir -p anykernel
+          cp out/arch/arm64/boot/Image.gz-dtb anykernel/
+          zip -r9 kernel.zip anykernel/
 
-    # 上传生成的文件
-    - name: Upload Kernel ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel
-        path: kernel.zip
+      - name: Upload Kernel ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel
+          path: kernel.zip
