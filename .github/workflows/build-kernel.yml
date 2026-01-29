@@ -1,13 +1,13 @@
 name: Build Kernel
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch: # 支持手动触发
   push:
     branches:
-      - oos13.1 # 按需调整分支
+      - main # 替换为你的分支名称
   pull_request:
     branches:
-      - oos13.1 # 按需调整分支
+      - main # 替换为你的分支名称
 
 jobs:
   build:
@@ -18,25 +18,26 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # 下载稳定的工具链
-    - name: Download Toolchain
+    # 下载 Neutron 工具链
+    - name: Download and Setup Toolchain
       run: |
         mkdir -p ~/toolchains/clang
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/platform-tools-build.tar.gz -O ~/toolchains/clang/clang.tar.gz
-        tar -xf ~/toolchains/clang/clang.tar.gz -C ~/toolchains/clang
+        wget -q https://github.com/kdrag0n/proton-clang/releases/download/20230814/neutron-clang.tar.zst -O ~/toolchain/neutron-clang.tar.zst
+        sudo apt-get update && sudo apt-get install -y zstd
+        tar -I zstd -xf ~/toolchain/neutron-clang.tar.zst -C ~/toolchains/clang --strip-components=1
         export PATH=~/toolchains/clang/bin:$PATH
 
-    # 安装所需依赖包
+    # 安装依赖
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libssl-dev xz-utils bc flex bison build-essential
+        sudo apt-get install -y libssl-dev bc build-essential bison flex libelf-dev
 
     # 设置环境变量
-    - name: Set environment variables
+    - name: Set Environment Variables
       run: |
         export ARCH=arm64
-        export CROSS_COMPILE=~/toolchains/clang/bin/aarch64-linux-android-
+        export CROSS_COMPILE=~/toolchains/clang/bin/aarch64-linux-gnu-
         export PATH=~/toolchains/clang/bin:$PATH
 
     # 编译内核
@@ -46,14 +47,14 @@ jobs:
         make O=out ARCH=arm64 defconfig
         make -j$(nproc) O=out ARCH=arm64
 
-    # 打包内核
+    # 打包生成内核
     - name: Package Kernel into ZIP
       run: |
         mkdir -p anykernel
         cp out/arch/arm64/boot/Image.gz-dtb anykernel/
         zip -r9 kernel.zip anykernel/
 
-    # 上传生成的 zip 文件
+    # 上传生成的文件
     - name: Upload Kernel ZIP
       uses: actions/upload-artifact@v4
       with:
