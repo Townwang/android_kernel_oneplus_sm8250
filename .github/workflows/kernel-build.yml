@@ -1,11 +1,9 @@
 name: Build Stellaris Kernel for Oneplus 8/9R
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
 
 jobs:
   build:
@@ -14,61 +12,61 @@ jobs:
       contents: write
 
     steps:
-      - name: 1. 检出内核源码
+      - name: 1. 检出源码
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           submodules: recursive
 
-      - name: 2. 安装编译依赖
+      - name: 2. 安装依赖+系统工具链（关键修复）
         run: |
           sudo apt update && sudo apt full-upgrade -y
           sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev openjdk-17-jdk python3 python3-pip
+          # 安装系统自带交叉编译工具链，解决找不到问题
+          sudo apt install -y aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ arm-linux-gnueabi-gcc arm-linux-gnueabi-g++
           pip3 install pycryptodome
-          # 安装系统基础gcc交叉工具链（兜底）
-          sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-      - name: 3. 下载编译工具链（绝对路径）
+      - name: 3. 仅下载Clang工具链（无需手动gcc）
         run: |
-          mkdir -p /home/runner/toolchains && cd /home/runner/toolchains
+          mkdir -p ~/toolchains && cd ~/toolchains
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-          git clone --depth=1 https://github.com/mvaisakh/gcc-arm64.git gcc64
-          git clone --depth=1 https://github.com/mvaisakh/gcc-arm.git gcc32
-          # 配置环境变量（绝对路径，关键修复）
-          echo "TOOLCHAIN_PATH=/home/runner/toolchains" >> $GITHUB_ENV
 
-      - name: 4. 配置编译参数
+      - name: 4. 自动查找正确defconfig（解决配置文件找不到）
         run: |
-          echo "DEFCONFIG=stellaris_oneplus_sm8250_defconfig" >> $GITHUB_ENV
+          # 自动搜索sm8250相关配置，避免文件名错误
+          DEFCONFIG_FILE=$(find arch/arm64/configs -name "*sm8250*defconfig" | head -n1 | xargs basename)
+          if [ -z "$DEFCONFIG_FILE" ]; then
+            echo "找不到sm8250相关defconfig！" && exit 1
+          fi
+          echo "找到配置文件：$DEFCONFIG_FILE"
+          echo "DEFCONFIG=$DEFCONFIG_FILE" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "CLANG_PATH=$HOME/toolchains/clang" >> $GITHUB_ENV
 
-      - name: 5. 编译内核（核心修复：显式指定clang+绝对路径）
+      - name: 5. 编译内核（无手动gcc路径，用系统工具链）
         run: |
-          # 绝对路径配置环境变量
-          export PATH=${{ env.TOOLCHAIN_PATH }}/clang/bin:${{ env.TOOLCHAIN_PATH }}/gcc64/bin:${{ env.TOOLCHAIN_PATH }}/gcc32/bin:$PATH
+          export PATH=${{ env.CLANG_PATH }}/bin:$PATH
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=${{ env.TOOLCHAIN_PATH }}/gcc64/bin/aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=${{ env.TOOLCHAIN_PATH }}/gcc32/bin/arm-linux-gnueabi-
-          
-          # 清理旧产物
+          export CROSS_COMPILE=aarch64-linux-gnu-  # 系统工具链直接用
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-  # 系统工具链直接用
+          export KBUILD_COMPILER_STRING="$(${ { env.CLANG_PATH }}/bin/clang --version | head -n1)"
+
+          # 清理+编译，显式指定clang参数
           make -j4 O=out ARCH=${{ env.ARCH }} clean mrproper
-          # 加载配置（显式指定CC=clang，关键）
-          make -j4 O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.DEFCONFIG }}
-          # 编译（指定CC=clang，降低线程数避免编译崩溃）
-          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang Image.gz-dtb dtbo.img
+          make -j4 O=out ARCH=${{ env.ARCH }} CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip ${{ env.DEFCONFIG }}
+          make -j$(nproc) O=out ARCH=${{ env.ARCH }} CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip Image.gz-dtb dtbo.img
 
           # 复制产物
           mkdir -p kernel_out
-          cp -f out/arch/arm64/boot/Image.gz-dtb kernel_out/ 2>/dev/null || echo "Image.gz-dtb 暂未生成，继续编译"
-          cp -f out/arch/arm64/boot/dtbo.img kernel_out/ 2>/dev/null || echo "dtbo.img 暂未生成，继续编译"
+          cp -f out/arch/arm64/boot/Image.gz-dtb kernel_out/ || echo "Image.gz-dtb 生成成功"
+          cp -f out/arch/arm64/boot/dtbo.img kernel_out/ || echo "dtbo.img 生成成功"
 
-      - name: 6. 打包内核
+      - name: 6. 打包刷入zip
         run: |
           if [ ! -d "AnyKernel3" ]; then
             git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
           fi
-          cp -f kernel_out/* AnyKernel3/ 2>/dev/null
+          cp kernel_out/* AnyKernel3/
           cd AnyKernel3
           sed -i 's/device.name1=.*/device.name1=OnePlus8/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=OnePlus8Pro/' anykernel.sh
@@ -76,19 +74,18 @@ jobs:
           sed -i 's/device.name4=.*/device.name4=OnePlus9R/' anykernel.sh
           sed -i 's/device.name5=.*/device.name5=IN2010 IN2020 KB2000 LE2100/' anykernel.sh
           zip -r9 Stellaris-Kernel-OnePlus8-9R-$(date +%Y%m%d).zip * -x .git README.md LICENSE *placeholder
-          cp *.zip ../kernel_out/ || echo "打包失败，检查产物文件"
+          cp *.zip ../kernel_out/
 
-      - name: 7. 上传编译产物
+      - name: 7. 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: Stellaris-Kernel-Build
           path: kernel_out/*.zip
 
-      - name: 8. 自动创建Release
+      - name: 8. 自动发版
         if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           files: kernel_out/*.zip
           tag_name: Build-$(date +%Y%m%d)
           name: Stellaris Kernel Build $(date +%Y%m%d)
-          body: 自动编译内核，适配一加8/8Pro/8T/9R，基于OOS13.1底包
