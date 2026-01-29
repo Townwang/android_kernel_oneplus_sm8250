@@ -1,0 +1,62 @@
+name: Build Kernel
+
+on:
+  workflow_dispatch: # 可手动触发
+  push:
+    branches:
+      - main # 替换为你的分支名
+  pull_request:
+    branches:
+      - main # 替换为你的分支名
+
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: ubuntu-latest
+    steps:
+    # 检出代码
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # 设置缓存
+    - name: Cache Compiler
+      uses: actions/cache@v3
+      with:
+        path: ~/clang
+        key: ${{ runner.os }}-clang-oneplus
+
+    # 下载编译工具链
+    - name: Download Toolchain
+      run: |
+        mkdir -p ~/clang
+        wget -O ~/clang/clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/-/archive/refs/heads/master.tar.gz
+        tar -xf ~/clang/clang.tar.gz -C ~/clang
+        export PATH=~/clang/bin:$PATH
+
+    # 设置环境变量
+    - name: Set environment variables
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=~/clang/bin/aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=~/clang/bin/arm-linux-gnueabi-
+
+    # 编译内核
+    - name: Build the kernel
+      run: |
+        make O=out ARCH=arm64 defconfig
+        make -j$(nproc --all) O=out ARCH=arm64
+
+    # 打包内核成 zip
+    - name: Package Kernel into ZIP
+      run: |
+        mkdir -p anykernel
+        cp out/arch/arm64/boot/Image.gz-dtb anykernel/
+        zip -r9 kernel.zip anykernel/
+
+    # 将内核 zip 上传为 artifact
+    - name: Upload Kernel ZIP
+      uses: actions/upload-artifact@v3
+      with:
+        name: kernel
+        path: kernel.zip
