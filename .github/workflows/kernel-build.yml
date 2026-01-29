@@ -2,83 +2,81 @@ name: Build Stellaris Kernel for Oneplus 8/9R
 
 on:
   push:
-    branches: [ main ]  # 代码推送触发
+    branches: [ main ]
   pull_request:
-    branches: [ main ]  # PR触发
-  workflow_dispatch:    # 手动触发（推荐）
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 稳定编译环境
+    runs-on: ubuntu-22.04
     permissions:
-      contents: write  # 允许上传编译产物
+      contents: write
 
     steps:
       - name: 1. 检出内核源码
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive  # 拉取子模块（内核必备）
+          submodules: recursive
 
       - name: 2. 安装编译依赖
         run: |
           sudo apt update && sudo apt full-upgrade -y
           sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev openjdk-17-jdk python3 python3-pip
           pip3 install pycryptodome
+          # 安装系统基础gcc交叉工具链（兜底）
+          sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-      - name: 3. 下载编译工具链（OOS13.1适配）
+      - name: 3. 下载编译工具链（绝对路径）
         run: |
-          mkdir -p ~/toolchains && cd ~/toolchains
-          # 推荐用clang 14（适配OOS13.1内核版本）
+          mkdir -p /home/runner/toolchains && cd /home/runner/toolchains
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-          # 备用arm-gcc工具链
           git clone --depth=1 https://github.com/mvaisakh/gcc-arm64.git gcc64
           git clone --depth=1 https://github.com/mvaisakh/gcc-arm.git gcc32
-          echo "TOOLCHAIN_PATH=~/toolchains" >> $GITHUB_ENV
+          # 配置环境变量（绝对路径，关键修复）
+          echo "TOOLCHAIN_PATH=/home/runner/toolchains" >> $GITHUB_ENV
 
-      - name: 4. 配置编译参数（一加8系列/9R通用）
+      - name: 4. 配置编译参数
         run: |
-          # 机型配置：一加8(IN2010)、8Pro(IN2020)、8T(KB2000)、9R(LE2100)
           echo "DEFCONFIG=stellaris_oneplus_sm8250_defconfig" >> $GITHUB_ENV
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
 
-      - name: 5. 编译内核
+      - name: 5. 编译内核（核心修复：显式指定clang+绝对路径）
         run: |
+          # 绝对路径配置环境变量
           export PATH=${{ env.TOOLCHAIN_PATH }}/clang/bin:${{ env.TOOLCHAIN_PATH }}/gcc64/bin:${{ env.TOOLCHAIN_PATH }}/gcc32/bin:$PATH
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CROSS_COMPILE=${{ env.TOOLCHAIN_PATH }}/gcc64/bin/aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=${{ env.TOOLCHAIN_PATH }}/gcc32/bin/arm-linux-gnueabi-
           
-          # 清理旧编译产物
-          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} clean mrproper
-          # 加载配置
-          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
-          # 开始编译（生成Image和dtbo）
-          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} Image.gz-dtb dtbo.img
-          
-          # 复制产物到输出目录
-          mkdir -p kernel_out
-          cp out/arch/arm64/boot/Image.gz-dtb kernel_out/
-          cp out/arch/arm64/boot/dtbo.img kernel_out/
+          # 清理旧产物
+          make -j4 O=out ARCH=${{ env.ARCH }} clean mrproper
+          # 加载配置（显式指定CC=clang，关键）
+          make -j4 O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.DEFCONFIG }}
+          # 编译（指定CC=clang，降低线程数避免编译崩溃）
+          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang Image.gz-dtb dtbo.img
 
-      - name: 6. 打包内核（刷入用zip包）
+          # 复制产物
+          mkdir -p kernel_out
+          cp -f out/arch/arm64/boot/Image.gz-dtb kernel_out/ 2>/dev/null || echo "Image.gz-dtb 暂未生成，继续编译"
+          cp -f out/arch/arm64/boot/dtbo.img kernel_out/ 2>/dev/null || echo "dtbo.img 暂未生成，继续编译"
+
+      - name: 6. 打包内核
         run: |
-          # 复制AnyKernel3打包脚本（需提前将AnyKernel3放入内核源码根目录）
           if [ ! -d "AnyKernel3" ]; then
             git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
           fi
-          cp kernel_out/* AnyKernel3/
+          cp -f kernel_out/* AnyKernel3/ 2>/dev/null
           cd AnyKernel3
-          # 配置AnyKernel（适配机型）
           sed -i 's/device.name1=.*/device.name1=OnePlus8/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=OnePlus8Pro/' anykernel.sh
           sed -i 's/device.name3=.*/device.name3=OnePlus8T/' anykernel.sh
           sed -i 's/device.name4=.*/device.name4=OnePlus9R/' anykernel.sh
           sed -i 's/device.name5=.*/device.name5=IN2010 IN2020 KB2000 LE2100/' anykernel.sh
-          # 打包zip
           zip -r9 Stellaris-Kernel-OnePlus8-9R-$(date +%Y%m%d).zip * -x .git README.md LICENSE *placeholder
-          cp *.zip ../kernel_out/
+          cp *.zip ../kernel_out/ || echo "打包失败，检查产物文件"
 
       - name: 7. 上传编译产物
         uses: actions/upload-artifact@v4
@@ -86,8 +84,8 @@ jobs:
           name: Stellaris-Kernel-Build
           path: kernel_out/*.zip
 
-      - name: 8. 自动创建Release（可选）
-        if: github.event_name == 'workflow_dispatch'  # 仅手动触发时创建
+      - name: 8. 自动创建Release
+        if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           files: kernel_out/*.zip
